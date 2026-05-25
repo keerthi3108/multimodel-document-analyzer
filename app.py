@@ -38,6 +38,8 @@ UPLOAD_DIR = STORAGE_DIR / "uploads"
 REPORT_DIR = STORAGE_DIR / "reports"
 DB_PATH = STORAGE_DIR / "nexusdoc.json"
 SUPPORTED_TYPES = ["pdf", "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"]
+IMAGE_TYPES = {"png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"}
+GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 
 @dataclass
@@ -92,9 +94,33 @@ def inject_css() -> None:
                 linear-gradient(135deg, #050b14 0%, #081323 48%, #0d1425 100%);
         }
 
+        .stApp, .stApp p, .stApp li, .stApp label, .stApp span,
+        .stApp div, .stApp textarea, .stApp input {
+            color: #edf4ff;
+        }
+
         [data-testid="stSidebar"] {
             background: #050c18;
             border-right: 1px solid var(--line);
+        }
+
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span {
+            color: #dbeafe !important;
+            opacity: 1 !important;
+        }
+
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+            color: #c8d6ee !important;
+        }
+
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3 {
+            color: #f1f7ff !important;
         }
 
         [data-testid="stHeader"] {
@@ -110,7 +136,7 @@ def inject_css() -> None:
         }
 
         [data-testid="stFileUploaderDropzone"] * {
-            color: #dbeafe;
+            color: #dbeafe !important;
         }
 
         [data-testid="stFileUploaderDropzone"] button {
@@ -121,6 +147,25 @@ def inject_css() -> None:
 
         h1, h2, h3 {
             letter-spacing: 0;
+            color: #f4f8ff;
+        }
+
+        .stMarkdown, .stMarkdown p, .stCaptionContainer, .stText, .stTextArea label {
+            color: #dbe7fb !important;
+        }
+
+        div[data-testid="stAlert"] p, div[data-testid="stAlert"] span {
+            color: #eafefa !important;
+        }
+
+        div[data-testid="stMetric"] label,
+        div[data-testid="stMetric"] [data-testid="stMetricValue"],
+        div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+            color: #f4f8ff !important;
+        }
+
+        [data-baseweb="select"] *, [data-baseweb="radio"] *, [data-baseweb="checkbox"] * {
+            color: #edf4ff !important;
         }
 
         .hero {
@@ -158,7 +203,7 @@ def inject_css() -> None:
         }
 
         .hero-copy {
-            color: var(--muted);
+            color: #c8d6ee;
             font-size: 1rem;
             max-width: 820px;
             margin-top: 14px;
@@ -199,7 +244,7 @@ def inject_css() -> None:
         }
 
         .metric-label {
-            color: var(--muted);
+            color: #b8c8e4;
             font-size: .78rem;
             text-transform: uppercase;
             letter-spacing: .06em;
@@ -212,7 +257,7 @@ def inject_css() -> None:
         }
 
         .metric-note {
-            color: var(--muted);
+            color: #b8c8e4;
             font-size: .82rem;
             margin-top: 4px;
         }
@@ -245,7 +290,7 @@ def inject_css() -> None:
         }
 
         .small-muted {
-            color: var(--muted);
+            color: #b8c8e4;
             font-size: .84rem;
         }
 
@@ -317,7 +362,10 @@ def keywords(text: str, limit: int = 12) -> list[str]:
 def simple_summary(text: str, max_sentences: int = 5) -> str:
     sentences = split_sentences(text)
     if not sentences:
-        return "No readable text was found yet. Try uploading a clearer scan or enabling OCR."
+        return (
+            "No text layer was detected yet. If this is an image, chart, scan, or handwritten page, "
+            "use visual analysis or re-run analysis after Tesseract is available."
+        )
     key_terms = set(keywords(text, 18))
     scored: list[tuple[int, int, str]] = []
     for idx, sentence in enumerate(sentences):
@@ -427,6 +475,118 @@ def analyze_text(name: str, text: str, pages: list[dict[str, Any]], file_type: s
     }
 
 
+def has_readable_text(text: str) -> bool:
+    if not text:
+        return False
+    if "OCR unavailable:" in text:
+        return False
+    words = re.findall(r"[A-Za-z0-9]{2,}", text)
+    return len(words) >= 8
+
+
+def image_to_data_url(image: Image.Image, max_side: int = 1600) -> str:
+    image = image.convert("RGB")
+    image.thumbnail((max_side, max_side))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=88, optimize=True)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def document_image_data_urls(path: str, file_type: str, limit: int = 3) -> list[str]:
+    file_path = Path(path)
+    if not file_path.exists():
+        return []
+    urls: list[str] = []
+    if file_type == "pdf":
+        doc = fitz.open(file_path)
+        try:
+            for page_index in range(min(limit, doc.page_count)):
+                page = doc[page_index]
+                pix = page.get_pixmap(matrix=fitz.Matrix(1.6, 1.6), alpha=False)
+                image = Image.open(io.BytesIO(pix.tobytes("png")))
+                urls.append(image_to_data_url(image))
+        finally:
+            doc.close()
+        return urls
+    if file_type in IMAGE_TYPES:
+        image = Image.open(file_path)
+        return [image_to_data_url(image)]
+    return []
+
+
+def call_multimodal_llm(prompt: str, doc: dict[str, Any] | ProcessedDocument, temperature: float = 0.2) -> str:
+    provider, online = provider_status()
+    if not online:
+        context = doc.text if isinstance(doc, ProcessedDocument) else doc.get("text", "")
+        return offline_answer(prompt, context)
+
+    if isinstance(doc, ProcessedDocument):
+        path = doc.path
+        file_type = doc.file_type
+        context = doc.text
+        name = doc.name
+    else:
+        path = doc.get("path", "")
+        file_type = doc.get("file_type", "")
+        context = doc.get("text", "")
+        name = doc.get("name", "document")
+
+    image_urls = document_image_data_urls(path, file_type)
+    if not image_urls:
+        return call_llm(prompt, context, temperature)
+
+    visual_prompt = (
+        f"Document: {name}\n"
+        f"Extract and explain both visual and text evidence. Identify document type, visible text, "
+        f"layout, chart/table signals, key facts, timeline clues, citations/page references when possible, "
+        f"and practical insights. Existing OCR/text layer:\n{context[:6000]}\n\nTask: {prompt}"
+    )
+    try:
+        if provider == "Groq":
+            from groq import Groq
+
+            client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+            content: list[dict[str, Any]] = [{"type": "text", "text": visual_prompt}]
+            for image_url in image_urls[:5]:
+                content.append({"type": "image_url", "image_url": {"url": image_url}})
+            response = client.chat.completions.create(
+                model=os.getenv("GROQ_VISION_MODEL", GROQ_VISION_MODEL),
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a multimodal document intelligence analyst. Be concise, factual, and cite page/image numbers when available.",
+                    },
+                    {"role": "user", "content": content},
+                ],
+                temperature=temperature,
+                max_completion_tokens=1400,
+            )
+            return response.choices[0].message.content or ""
+
+        from openai import OpenAI
+
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        content = [{"type": "text", "text": visual_prompt}]
+        for image_url in image_urls:
+            content.append({"type": "image_url", "image_url": {"url": image_url}})
+        response = client.chat.completions.create(
+            model=os.getenv("OPENAI_VISION_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a multimodal document intelligence analyst. Be concise, factual, and cite page/image numbers when available.",
+                },
+                {"role": "user", "content": content},
+            ],
+            temperature=temperature,
+            max_tokens=1400,
+        )
+        return response.choices[0].message.content or ""
+    except Exception as exc:
+        return f"{offline_answer(prompt, context)}\n\nVision fallback note: {exc}"
+
+
 def ocr_image(image: Image.Image) -> str:
     try:
         return pytesseract.image_to_string(image)
@@ -500,8 +660,57 @@ def process_upload(uploaded_file: Any, use_ocr: bool) -> ProcessedDocument:
         metadata=metadata,
         analysis=analysis,
     )
+    if not has_readable_text(text) and extension in IMAGE_TYPES | {"pdf"}:
+        visual_summary = call_multimodal_llm(
+            "Create a document intelligence brief from the visual content. Extract any visible words, explain charts/tables/layout, and list key insights.",
+            record,
+        )
+        if visual_summary and not visual_summary.startswith("No text layer"):
+            record.text = normalize_text(f"{text}\n\n[Visual analysis]\n{visual_summary}")
+            record.pages = [{"page": 1, "text": record.text, "used_ocr": use_ocr, "used_vision": True}]
+            record.analysis = analyze_text(uploaded_file.name, record.text, record.pages, extension)
+            record.analysis["visual_summary"] = visual_summary
     upsert_document(record)
     return record
+
+
+def reprocess_document(doc: dict[str, Any], use_ocr: bool = True) -> dict[str, Any]:
+    path = Path(doc.get("path", ""))
+    if not path.exists():
+        return doc
+    extension = doc.get("file_type", path.suffix.lstrip(".").lower())
+    if extension == "pdf":
+        text, pages, metadata = extract_pdf(path, use_ocr)
+    else:
+        text, pages, metadata = extract_image(path, use_ocr)
+
+    analysis = analyze_text(doc.get("name", path.name), text, pages, extension)
+    updated = dict(doc)
+    updated.update({"text": text, "pages": pages, "metadata": metadata, "analysis": analysis})
+    if not has_readable_text(text) and extension in IMAGE_TYPES | {"pdf"}:
+        temp_record = ProcessedDocument(
+            doc_id=updated["doc_id"],
+            name=updated["name"],
+            file_type=extension,
+            path=str(path),
+            uploaded_at=updated.get("uploaded_at", datetime.now().isoformat(timespec="seconds")),
+            text=text,
+            pages=pages,
+            metadata=metadata,
+            analysis=analysis,
+        )
+        visual_summary = call_multimodal_llm(
+            "Re-analyze this document visually. Extract visible text, explain image/chart/table content, and summarize insights.",
+            temp_record,
+        )
+        if visual_summary and not visual_summary.startswith("No text layer"):
+            updated["text"] = normalize_text(f"{text}\n\n[Visual analysis]\n{visual_summary}")
+            updated["pages"] = [{"page": 1, "text": updated["text"], "used_ocr": use_ocr, "used_vision": True}]
+            updated["analysis"] = analyze_text(updated["name"], updated["text"], updated["pages"], extension)
+            updated["analysis"]["visual_summary"] = visual_summary
+    Document = Query()
+    documents_table.upsert(updated, Document.doc_id == updated["doc_id"])
+    return updated
 
 
 def upsert_document(record: ProcessedDocument) -> None:
@@ -661,6 +870,7 @@ def make_report(doc: dict[str, Any]) -> Path:
         "timeline": analysis.get("timeline"),
         "citations": analysis.get("citations"),
         "tone": analysis.get("tone"),
+        "visual_summary": analysis.get("visual_summary"),
     }
     path = REPORT_DIR / f"{doc['doc_id']}_report.json"
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -823,11 +1033,19 @@ def render_analyzer(docs: list[dict[str, Any]]) -> None:
     with intelligence:
         st.markdown("#### Intelligence Brief")
         st.write(analysis.get("summary", ""))
+        if analysis.get("visual_summary"):
+            with st.expander("Visual intelligence"):
+                st.write(analysis["visual_summary"])
         st.markdown("".join(f'<span class="insight-chip">{term}</span>' for term in analysis.get("keywords", [])), unsafe_allow_html=True)
         cols = st.columns(3)
         cols[0].metric("Type", analysis.get("doc_type", "Document"))
         cols[1].metric("Read", f"{analysis.get('reading_minutes', 0)} min")
         cols[2].metric("Tone", analysis.get("tone", {}).get("label", "Neutral"))
+        if st.button("Re-run OCR / vision analysis", use_container_width=True):
+            with st.spinner("Refreshing document intelligence..."):
+                doc = reprocess_document(doc, use_ocr=True)
+            st.success("Document analysis refreshed.")
+            st.rerun()
         if st.button("Generate report", use_container_width=True):
             path = make_report(doc)
             st.success(f"Report saved: {path.name}")
@@ -862,7 +1080,10 @@ def render_analyzer(docs: list[dict[str, Any]]) -> None:
                 "Action items": "Extract concrete action items, owners if available, dates, and priorities.",
                 "Emotional tone": "Detect emotional tone, persuasive stance, urgency, and confidence level.",
             }
-            st.write(call_llm(prompt_map[tool], page_context(doc)))
+            if tool in {"Explain image + text", "Chart understanding"} or doc.get("file_type") in IMAGE_TYPES:
+                st.write(call_multimodal_llm(prompt_map[tool], doc))
+            else:
+                st.write(call_llm(prompt_map[tool], page_context(doc)))
 
 
 def render_chat(docs: list[dict[str, Any]]) -> None:
@@ -882,7 +1103,10 @@ def render_chat(docs: list[dict[str, Any]]) -> None:
     question = st.chat_input("Ask for summaries, citations, contradictions, risks, timelines, or next actions")
     if question:
         context = page_context(selected_doc) if selected_doc else "\n\n".join(page_context(doc) for doc in docs)
-        answer = call_llm(question, context)
+        if selected_doc and selected_doc.get("file_type") in IMAGE_TYPES:
+            answer = call_multimodal_llm(question, selected_doc)
+        else:
+            answer = call_llm(question, context)
         chat_table.insert({"role": "user", "content": question, "created_at": datetime.now().isoformat(timespec="seconds")})
         chat_table.insert({"role": "assistant", "content": answer, "created_at": datetime.now().isoformat(timespec="seconds")})
         st.rerun()
