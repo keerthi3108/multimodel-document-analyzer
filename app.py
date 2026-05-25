@@ -154,6 +154,24 @@ def inject_css() -> None:
             color: #dbe7fb !important;
         }
 
+        textarea, .stTextArea textarea {
+            background: #071426 !important;
+            color: #f4f8ff !important;
+            border: 1px solid rgba(143, 183, 255, .34) !important;
+            caret-color: #35d0ba !important;
+        }
+
+        textarea::placeholder, input::placeholder {
+            color: #9fb0ca !important;
+            opacity: 1 !important;
+        }
+
+        input, .stTextInput input {
+            background: #071426 !important;
+            color: #f4f8ff !important;
+            border-color: rgba(143, 183, 255, .34) !important;
+        }
+
         div[data-testid="stAlert"] p, div[data-testid="stAlert"] span {
             color: #eafefa !important;
         }
@@ -166,6 +184,46 @@ def inject_css() -> None:
 
         [data-baseweb="select"] *, [data-baseweb="radio"] *, [data-baseweb="checkbox"] * {
             color: #edf4ff !important;
+        }
+
+        [data-baseweb="select"],
+        [data-baseweb="select"] > div {
+            background: #071426 !important;
+            border-color: rgba(143, 183, 255, .34) !important;
+        }
+
+        [data-baseweb="tab-highlight"] {
+            background-color: #35d0ba !important;
+        }
+
+        [data-testid="stSegmentedControl"] {
+            background: transparent !important;
+        }
+
+        [data-testid="stSegmentedControl"] label,
+        [data-testid="stSegmentedControl"] label p {
+            color: #dbe7fb !important;
+        }
+
+        [data-testid="stSegmentedControl"] label {
+            background: #071426 !important;
+            border-color: rgba(143, 183, 255, .30) !important;
+        }
+
+        [data-testid="stSegmentedControl"] label[data-baseweb="radio"] {
+            color: #dbe7fb !important;
+        }
+
+        [data-testid="stSegmentedControl"] label:has(input:checked),
+        [data-testid="stSegmentedControl"] [aria-checked="true"] {
+            background: rgba(53, 208, 186, .18) !important;
+            border-color: rgba(53, 208, 186, .62) !important;
+        }
+
+        [data-testid="stSegmentedControl"] label:has(input:checked) p,
+        [data-testid="stSegmentedControl"] [aria-checked="true"] p {
+            color: #ffffff !important;
+            font-weight: 700 !important;
         }
 
         .hero {
