@@ -30,6 +30,14 @@ try:
 except Exception:  # pragma: no cover - optional in constrained installs
     load_dotenv = None
 
+try:
+    from langsmith import traceable
+except Exception:  # pragma: no cover - LangSmith is optional at runtime
+    def traceable(*_args: Any, **_kwargs: Any):
+        def decorator(func):
+            return func
+        return decorator
+
 
 APP_TITLE = "NexusDoc AI"
 BASE_DIR = Path(__file__).resolve().parent
@@ -58,6 +66,9 @@ class ProcessedDocument:
 def bootstrap() -> TinyDB:
     if load_dotenv:
         load_dotenv()
+    os.environ.setdefault("LANGSMITH_PROJECT", "nexusdoc-ai")
+    if os.getenv("LANGSMITH_API_KEY"):
+        os.environ.setdefault("LANGSMITH_TRACING", "true")
     STORAGE_DIR.mkdir(exist_ok=True)
     UPLOAD_DIR.mkdir(exist_ok=True)
     REPORT_DIR.mkdir(exist_ok=True)
@@ -222,6 +233,39 @@ def inject_css() -> None:
 
         [data-testid="stSegmentedControl"] label:has(input:checked) p,
         [data-testid="stSegmentedControl"] [aria-checked="true"] p {
+            color: #ffffff !important;
+            font-weight: 700 !important;
+        }
+
+        div[role="radiogroup"] {
+            background: transparent !important;
+        }
+
+        div[role="radiogroup"] label,
+        div[role="radiogroup"] label > div,
+        div[role="radiogroup"] label > span {
+            background: #071426 !important;
+            color: #dbeafe !important;
+            border-color: rgba(143, 183, 255, .34) !important;
+        }
+
+        div[role="radiogroup"] label p,
+        div[role="radiogroup"] label span,
+        div[role="radiogroup"] label div {
+            color: #dbeafe !important;
+        }
+
+        div[role="radiogroup"] label:has(input:checked),
+        div[role="radiogroup"] label:has(input:checked) > div,
+        div[role="radiogroup"] label:has(input:checked) > span {
+            background: rgba(53, 208, 186, .20) !important;
+            color: #ffffff !important;
+            border-color: rgba(53, 208, 186, .70) !important;
+        }
+
+        div[role="radiogroup"] label:has(input:checked) p,
+        div[role="radiogroup"] label:has(input:checked) span,
+        div[role="radiogroup"] label:has(input:checked) div {
             color: #ffffff !important;
             font-weight: 700 !important;
         }
@@ -573,6 +617,7 @@ def document_image_data_urls(path: str, file_type: str, limit: int = 3) -> list[
     return []
 
 
+@traceable(name="nexusdoc_multimodal_llm_call", run_type="llm", project_name=os.getenv("LANGSMITH_PROJECT", "nexusdoc-ai"))
 def call_multimodal_llm(prompt: str, doc: dict[str, Any] | ProcessedDocument, temperature: float = 0.2) -> str:
     provider, online = provider_status()
     if not online:
@@ -693,6 +738,7 @@ def extract_image(path: Path, use_ocr: bool) -> tuple[str, list[dict[str, Any]],
     return normalize_text(text), pages, metadata
 
 
+@traceable(name="nexusdoc_process_upload", run_type="chain", project_name=os.getenv("LANGSMITH_PROJECT", "nexusdoc-ai"))
 def process_upload(uploaded_file: Any, use_ocr: bool) -> ProcessedDocument:
     content = uploaded_file.getvalue()
     doc_id = file_hash(content)
@@ -796,6 +842,17 @@ def provider_status() -> tuple[str, bool]:
     return "Offline intelligence", False
 
 
+def langsmith_status() -> tuple[str, bool]:
+    has_key = bool(os.getenv("LANGSMITH_API_KEY"))
+    tracing_on = os.getenv("LANGSMITH_TRACING", "").lower() in {"1", "true", "yes", "on"}
+    if has_key and tracing_on:
+        return os.getenv("LANGSMITH_PROJECT", "nexusdoc-ai"), True
+    if has_key:
+        return "LangSmith key found, tracing off", False
+    return "LangSmith not configured", False
+
+
+@traceable(name="nexusdoc_text_llm_call", run_type="llm", project_name=os.getenv("LANGSMITH_PROJECT", "nexusdoc-ai"))
 def call_llm(prompt: str, context: str, temperature: float = 0.2) -> str:
     provider, online = provider_status()
     if not online:
@@ -976,7 +1033,11 @@ def metric_cards(docs: list[dict[str, Any]]) -> None:
 def render_sidebar(docs: list[dict[str, Any]]) -> tuple[bool, list[Any]]:
     st.sidebar.markdown("## Command Center")
     provider, online = provider_status()
+    langsmith_project, tracing_enabled = langsmith_status()
     st.sidebar.success(f"{provider} ready" if online else "Offline mode active")
+    st.sidebar.caption(f"LangSmith tracing: {'on' if tracing_enabled else 'off'}")
+    if tracing_enabled:
+        st.sidebar.caption(f"Project: {langsmith_project}")
     use_ocr = st.sidebar.toggle("OCR for scans and images", value=True)
     uploaded = st.sidebar.file_uploader(
         "Drop documents",
